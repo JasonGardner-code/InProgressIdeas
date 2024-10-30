@@ -1,31 +1,18 @@
 import frida
 import sys
-import threading
+import time
 
-# Process name to search for
+# Target process name
 PROCESS_NAME = "RootBeer Sample"
 
-# List of methods related to root detection
-root_detection_methods = [
-    "checkForSuBinary",
-    "checkSuExists",
-    "checkForRWPaths",
-    "checkForMagiskBinary",
-    "checkForBusyBoxBinary",
-    "detectRootManagementApps",
-    "detectPotentiallyDangerousApps",
-    "detectRootCloakingApps",
-    "detectTestKeys",
-    "checkForDangerousProps",
-    "checkForNativeLibraryReadAccess",
-    "canLoadNativeLibrary"
-]
-
-# Frida script to enumerate classes and methods in the RootBeer package
-ENUM_SCRIPT = """
+# Frida script to enumerate and hook RootBeer methods
+ENUM_AND_HOOK_SCRIPT = """
 Java.perform(function() {
+    console.log('Java environment active, starting enumeration and hooking');
+
+    // Define RootBeer-related packages
     var rootbeerPrefix = 'com.scottyab.rootbeer';
-    console.log('Enumerating classes in package: ' + rootbeerPrefix);
+    var classesHooked = 0;
 
     // Enumerate all loaded classes
     Java.enumerateLoadedClasses({
@@ -40,6 +27,16 @@ Java.perform(function() {
                     methods.forEach(function(method) {
                         var methodName = method.getName();
                         console.log('[*] Found method: ' + className + '.' + methodName);
+
+                        // Hook the method dynamically
+                        if (cls[methodName]) {
+                            cls[methodName].implementation = function() {
+                                console.log('[*] ' + className + '.' + methodName + ' called, returning false');
+                                return false;  // Override return value to bypass check
+                            };
+                            console.log('[+] Hooked: ' + className + '.' + methodName);
+                            classesHooked++;
+                        }
                     });
                 } catch (e) {
                     console.error('Error accessing class ' + className + ': ' + e);
@@ -47,86 +44,38 @@ Java.perform(function() {
             }
         },
         onComplete: function() {
-            console.log('Enumeration complete.');
+            if (classesHooked > 0) {
+                console.log('[+] Enumeration and hooking complete. Total hooks: ' + classesHooked);
+            } else {
+                console.log('[-] No methods found to hook.');
+            }
         }
     });
 });
 """
 
-# Function to handle messages from Frida
-methods_to_hook = {}
 def on_message(message, data):
-    global methods_to_hook
+    """ Handle messages from Frida """
     if message['type'] == 'send':
-        msg = message['payload']
-        print(msg)
-
-        if '[*] Found method' in msg:
-            # Parse class and method names
-            cls, method = msg.replace('[*] Found method: ', '').split('.')
-            if cls not in methods_to_hook:
-                methods_to_hook[cls] = []
-            methods_to_hook[cls].append(method)
-
+        print(f"[LOG] {message['payload']}")
     elif message['type'] == 'error':
-        print(f"Error: {message['stack']}")
+        print(f"[ERROR] {message['stack']}")
 
-# Function to generate a dynamic Frida script for hooking methods
-def generate_hook_script(methods_to_hook):
-    script = "Java.perform(function() {\n"
-    script += "  console.log('Starting dynamic RootBeer bypass...');\n"
-
-    for cls, methods in methods_to_hook.items():
-        script += f"  var cls = Java.use('{cls}');\n"
-        for method in methods:
-            script += f"  cls['{method}'].implementation = function() {{\n"
-            script += f"    console.log('{cls}.{method} called, returning false');\n"
-            script += "    return false;\n"
-            script += "  };\n"
-            script += f"  console.log('Successfully hooked: {cls}.{method}');\n"
-
-    script += "  console.log('Dynamic RootBeer bypass script loaded');\n"
-    script += "});\n"
-    return script
-
-# Function to attach to the process and enumerate classes and methods
-def attach_and_enumerate():
+def attach_to_process():
     try:
-        # Get the device and process ID by name
         device = frida.get_usb_device(timeout=5)
         pid = device.get_process(PROCESS_NAME).pid
         session = device.attach(pid)
+        print(f"[*] Attached to process '{PROCESS_NAME}' (PID: {pid})")
 
-        print(f"[*] Attached to process: {PROCESS_NAME} (PID: {pid})")
-        print("[*] Enumerating classes and methods in RootBeer...")
-
-        # Load the enumeration script
-        script = session.create_script(ENUM_SCRIPT)
+        # Create and load the Frida script
+        script = session.create_script(ENUM_AND_HOOK_SCRIPT)
         script.on('message', on_message)
         script.load()
 
-        # Wait for enumeration to complete
-        threading.Timer(5, generate_and_load_script, args=[session]).start()
+        print("[*] Frida script loaded. Monitoring output...\n")
+        
+        # Keep the script running
+        sys.stdin.read()
 
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-# Function to generate and load the bypass script
-def generate_and_load_script(session):
-    if methods_to_hook:
-        bypass_script = generate_hook_script(methods_to_hook)
-        print("\n[+] Generated bypass script:\n")
-        print(bypass_script)
-
-        try:
-            script = session.create_script(bypass_script)
-            script.load()
-            print("[+] Root detection bypass script loaded successfully!")
-        except Exception as e:
-            print(f"Error loading bypass script: {e}")
-    else:
-        print("[-] No methods found to hook.")
-
-if __name__ == '__main__':
-    attach_and_enumerate()
+    except frida.ProcessNotFoundErro
